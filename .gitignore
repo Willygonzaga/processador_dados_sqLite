@@ -1,5 +1,5 @@
 Base Teste Prova/
 
-__pycache__/
+__pycache__
 
-.live.sqlite
+live.sqlite
