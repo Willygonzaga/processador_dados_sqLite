@@ -12,10 +12,9 @@ app = FastAPI(
 
 # Função para processar os dados do banco
 def get_processar_dados(db_arquivo: str):
-    """
-    Conecta-se ao banco de dados, extrai e unifica os dados das tabelas de processos,
-    e depois processa a coluna 'Metrics'.
-    """
+    
+
+    # Extrai os dados
     try:
         conn = sqlite3.connect(db_arquivo)
         
@@ -24,16 +23,14 @@ def get_processar_dados(db_arquivo: str):
         df_tabela3 = pd.read_sql_query("SELECT * FROM processes3", conn)
         
         conn.close()
+    # ===================================================================
         
         # Unifica os dados
         df_unificado = pd.concat([df_tabela1, df_tabela2, df_tabela3], ignore_index=True)
         
-        # --- NOVO: Lógica para processar a coluna 'Metrics' ---
-        # 1. Divide a string da coluna 'Metrics' em uma lista de métricas.
-        # Ex: "cpu:10;mem:20" -> ["cpu:10", "mem:20"]
+        # Processa a coluna metrics
         df_unificado['Metrics'] = df_unificado['Metrics'].str.split(';')
 
-        # 2. Transforma cada lista de métricas em um dicionário.
         def parse_metrics(metric_list):
             if not metric_list or not isinstance(metric_list, list):
                 return {}
@@ -47,7 +44,6 @@ def get_processar_dados(db_arquivo: str):
 
         df_unificado['ParsedMetrics'] = df_unificado['Metrics'].apply(parse_metrics)
         
-        # 3. Expande o dicionário em novas colunas no DataFrame
         df_metrics_expanded = pd.json_normalize(df_unificado['ParsedMetrics'])
         
         # 4. Concatena as novas colunas ao DataFrame unificado original e remove a coluna temporária
@@ -64,11 +60,11 @@ def get_processar_dados(db_arquivo: str):
 # --- Endpoints da API ---
 @app.get("/")
 def raiz():
-    return {"message": "API rodando. Use os endpoints para interagir com o banco de dados."}
+    return {"API rodando. Use os endpoints para interagir com o banco de dados."}
 
 # Rota para consultar dados
 @app.get("/get-dados/", response_model=Dict[str, Any])
-def get_dados_unificados_endpoint():
+def get_dados_unificados():
     db_arquivo = "Base Teste Prova/live.sqlite"
     df_unificado = get_processar_dados(db_arquivo)
     unified_data_json = df_unificado.to_dict(orient='records')
@@ -87,13 +83,10 @@ async def upload_arquivo(file: UploadFile = File(...)):
 
 # Rota de consulta com filtro de tempo
 @app.get("/processes/")
-def get_data_by_time_range(start_timestamp: int, end_timestamp: int):
-    """
-    Consulta dados unificados de um intervalo de tempo (timestamp em milissegundos).
-    A coluna 'ByteSize' está sendo usada como o timestamp para este exemplo.
-    """
-    db_file = "Base Teste Prova/live.sqlite"
-    df_unificado = get_processar_dados(db_file)
+def get_dados_intervalos(start_timestamp: int, end_timestamp: int):
+  
+    db_arquivo = "Base Teste Prova/live.sqlite"
+    df_unificado = get_processar_dados(db_arquivo)
 
     df_filtrado = df_unificado[
         (df_unificado['ByteSize'] >= start_timestamp) & 
@@ -101,7 +94,7 @@ def get_data_by_time_range(start_timestamp: int, end_timestamp: int):
     ]
     
     if df_filtrado.empty:
-        return {"message": "Nenhum registro encontrado para o intervalo de tempo fornecido."}
+        return {"Nenhum registro encontrado para o intervalo de tempo fornecido."}
     
     filtered_data_json = df_filtrado.to_dict(orient='records')
     return {"data": filtered_data_json}
