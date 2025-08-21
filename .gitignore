@@ -1,5 +1,5 @@
-# Ignorar cache do Python
+# Ignora o cache do Python
 __pycache__/
 
-# Ignorar o arquivo do banco de dados local
-live.sqlite
+# Ignora o arquivo do banco de dados local
+Base Teste Prova/live.sqlite
