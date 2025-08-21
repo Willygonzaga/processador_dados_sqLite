@@ -1,78 +1,76 @@
 import sqlite3
 import pandas as pd
-from fastapi import FastAPI, HTTPException, UploadFile, File
-from typing import Dict, Any, List
+from fastapi import FastAPI, HTTPException, UploadFile, File, Query
+from typing import Dict, Any, List, Optional
+import io
 
 # Inicializa a aplicação FastAPI
 app = FastAPI(
-    title="API de Desafio",
-    description="API para upload, consulta e análise de métricas.",
+    title="Desafio Técnico - Solução Final",
+    description="API completa para upload, consulta e análise de métricas.",
     version="1.0.0"
 )
 
-# Função para processar os dados do banco
-def get_processar_dados(db_arquivo: str):
-    
+# --- Funções de processamento de dados ---
 
-    # Extrai os dados
+def get_processed_data(db_file: str) -> pd.DataFrame:
+    """
+    Conecta-se ao banco de dados, extrai e unifica os dados das tabelas de processos,
+    e depois processa a coluna 'metrics'.
+    """
     try:
-        conn = sqlite3.connect(db_arquivo)
+        conn = sqlite3.connect(db_file)
         
+        # Lê os dados de cada tabela para um DataFrame do pandas
         df_tabela1 = pd.read_sql_query("SELECT * FROM processes1", conn)
         df_tabela2 = pd.read_sql_query("SELECT * FROM processes2", conn)
         df_tabela3 = pd.read_sql_query("SELECT * FROM processes3", conn)
         
         conn.close()
-    # ===================================================================
         
-        # Unifica os dados
+        # 1. Unifica os dados
         df_unificado = pd.concat([df_tabela1, df_tabela2, df_tabela3], ignore_index=True)
         
-        # Processa a coluna metrics
-        df_unificado['Metrics'] = df_unificado['Metrics'].str.split(';')
-
-        def parse_metrics(metric_list):
-            if not metric_list or not isinstance(metric_list, list):
-                return {}
-            
-            metrics_dict = {}
-            for item in metric_list:
-                if ':' in item:
-                    key, value = item.split(':', 1)
-                    metrics_dict[key.strip()] = value.strip()
-            return metrics_dict
-
-        df_unificado['ParsedMetrics'] = df_unificado['Metrics'].apply(parse_metrics)
+        # 2. Processa a coluna 'metrics'
+        # Define os nomes das métricas na ordem correta
+        metric_names = ['timestamp', 'usagetime', 'delta_cpu_time', 'cpu_usage', 'rx_data', 'tx_data']
         
-        df_metrics_expanded = pd.json_normalize(df_unificado['ParsedMetrics'])
+        # Cria uma nova coluna temporária, dividindo a string 'metrics' por ';' e depois por '::'
+        # e criando um DataFrame com as novas colunas
+        metrics_df = df_unificado['metrics'].str.split(';').str[0].str.split('::', expand=True)
+        metrics_df.columns = metric_names
         
-        # 4. Concatena as novas colunas ao DataFrame unificado original e remove a coluna temporária
-        df_unificado = pd.concat([df_unificado.drop(columns=['Metrics', 'ParsedMetrics']), df_metrics_expanded], axis=1)
+        # Converte os tipos de dados conforme especificado
+        metrics_df['cpu_usage'] = pd.to_numeric(metrics_df['cpu_usage'], errors='coerce')
+        metrics_df['rx_data'] = pd.to_numeric(metrics_df['rx_data'], errors='coerce', downcast='integer')
+        metrics_df['tx_data'] = pd.to_numeric(metrics_df['tx_data'], errors='coerce', downcast='integer')
+        
+        # Une as novas colunas ao DataFrame original e remove a coluna 'metrics'
+        df_final = pd.concat([df_unificado.drop(columns=['metrics']), metrics_df], axis=1)
 
-        # Retorna o DataFrame processado
-        return df_unificado
+        # Remove linhas com valores nulos resultantes da conversão
+        df_final = df_final.dropna(subset=['timestamp'])
+
+        return df_final
 
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Arquivo '{db_arquivo}' não encontrado.")
+        raise HTTPException(status_code=404, detail=f"Arquivo '{db_file}' não encontrado.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao processar dados: {str(e)}")
 
 # --- Endpoints da API ---
+
 @app.get("/")
 def raiz():
-    return {"API rodando. Use os endpoints para interagir com o banco de dados."}
+    """Retorna uma mensagem de boas-vindas."""
+    return {"message": "API rodando. Acesse a documentação em /docs para interagir com o banco de dados."}
 
-# Rota para consultar dados
-@app.get("/get-dados/", response_model=Dict[str, Any])
-def get_dados_unificados():
-    db_arquivo = "Base Teste Prova/live.sqlite"
-    df_unificado = get_processar_dados(db_arquivo)
-    unified_data_json = df_unificado.to_dict(orient='records')
-    return {"data": unified_data_json}
-
-# Rota para upload do arquivo
 @app.post("/upload-db/")
 async def upload_arquivo(file: UploadFile = File(...)):
+    """
+    Faz o upload de um arquivo .sqlite para o servidor e o armazena.
+    O arquivo é salvo na pasta Base Teste Prova e substitui um arquivo existente.
+    """
     if file.filename.endswith('.sqlite'):
         db_caminho = f"Base Teste Prova/{file.filename}"
         with open(db_caminho, "wb") as f:
@@ -81,20 +79,32 @@ async def upload_arquivo(file: UploadFile = File(...)):
     else:
         raise HTTPException(status_code=400, detail="Apenas arquivos .sqlite são permitidos.")
 
-# Rota de consulta com filtro de tempo
 @app.get("/processes/")
-def get_dados_intervalos(start_timestamp: int, end_timestamp: int):
-  
-    db_arquivo = "Base Teste Prova/live.sqlite"
-    df_unificado = get_processar_dados(db_arquivo)
+def get_processes(start: Optional[int] = Query(None, description="Timestamp inicial (em milissegundos)"),
+                  end: Optional[int] = Query(None, description="Timestamp final (em milissegundos)")):
+    """
+    Retorna processos em um intervalo de tempo, já tratados e consolidados.
+    Se 'start' e 'end' não forem fornecidos, todos os registros são retornados.
+    """
+    db_file = "Base Teste Prova/live.sqlite"
+    df_final = get_processed_data(db_file)
+    
+    # Converte a coluna timestamp para numérico para garantir a comparação
+    df_final['timestamp'] = pd.to_numeric(df_final['timestamp'], errors='coerce')
+    
+    # Aplica o filtro de tempo se os parâmetros start e end forem fornecidos
+    if start is not None and end is not None:
+        df_filtrado = df_final[
+            (df_final['timestamp'] >= start) & 
+            (df_final['timestamp'] <= end)
+        ]
+        data_to_return = df_filtrado
+    else:
+        data_to_return = df_final
 
-    df_filtrado = df_unificado[
-        (df_unificado['ByteSize'] >= start_timestamp) & 
-        (df_unificado['ByteSize'] <= end_timestamp)
-    ]
+    if data_to_return.empty:
+        return {"message": "Nenhum registro encontrado para o intervalo de tempo fornecido."}
     
-    if df_filtrado.empty:
-        return {"Nenhum registro encontrado para o intervalo de tempo fornecido."}
-    
-    filtered_data_json = df_filtrado.to_dict(orient='records')
-    return {"data": filtered_data_json}
+    # Converte o DataFrame para o formato JSON esperado
+    json_response = data_to_return.to_dict(orient='records')
+    return {"data": json_response}

@@ -1,0 +1,5 @@
+# Ignorar cache do Python
+__pycache__/
+
+# Ignorar o arquivo do banco de dados local
+live.sqlite
